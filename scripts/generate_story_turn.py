@@ -128,6 +128,21 @@ def should_render_audio(story_id: str) -> bool:
     return bool(val)
 
 
+def get_episode_target(story_id: str) -> int:
+    cfg = load_story_settings(story_id)
+    return int(cfg.get('episode_target', 10))
+
+
+def calculate_episode_phase(turn_num: int, target: int) -> str:
+    if turn_num >= target:
+        return 'finale'
+    if turn_num >= int(target * 0.7) + 1:
+        return 'approaching_end'
+    if turn_num >= int(target * 0.4) + 1:
+        return 'mid'
+    return 'early'
+
+
 def should_roll_episode(user_input: str) -> bool:
     u = (user_input or '').lower()
     if 'эпизод' not in u:
@@ -217,7 +232,7 @@ def build_scene_summary(scene_text: str, user_input: str) -> str:
     return estimate_words_150_budget(t)
 
 
-def compact_packet(packet: dict, episode_ctx: dict) -> dict:
+def compact_packet(packet: dict, episode_ctx: dict, episode_target: int = 10) -> dict:
     state = packet.get('state', {})
     world = packet.get('world', {})
     chars = packet.get('characters', {})
@@ -242,6 +257,11 @@ def compact_packet(packet: dict, episode_ctx: dict) -> dict:
         if str(e.get('summary', '')).strip()
     ]
 
+    turns_used = len(entry_objs)
+    this_turn = turns_used + 1
+    episode_phase = calculate_episode_phase(this_turn, episode_target)
+    turns_remaining = max(0, episode_target - this_turn)
+
     return {
         'story_id': packet.get('story_id'),
         'genre': packet.get('genre'),
@@ -256,20 +276,45 @@ def compact_packet(packet: dict, episode_ctx: dict) -> dict:
         'characters': names,
         'episode_summaries': entries,
         'completed_episode_summaries': completed,
+        'episode_phase': episode_phase,
+        'turns_remaining': turns_remaining,
+        'episode_target': episode_target,
         'user_input': packet.get('user_input', ''),
     }
 
 
-def build_messages(packet: dict, episode_ctx: dict):
-    slim = compact_packet(packet, episode_ctx)
-    add_branch = should_add_branch(packet.get('user_input', ''))
+def build_messages(packet: dict, episode_ctx: dict, episode_target: int = 10):
+    slim = compact_packet(packet, episode_ctx, episode_target)
+    episode_phase = slim['episode_phase']
+
+    if episode_phase == 'finale':
+        add_branch = False
+    else:
+        add_branch = should_add_branch(packet.get('user_input', ''))
+
+    phase_instruction = ''
+    if episode_phase == 'approaching_end':
+        phase_instruction = (
+            ' Эпизод приближается к концу. '
+            'Начинай сводить открытые нити, не вводи новых сюжетных линий. '
+            'Накапливай эмоциональное напряжение сцены.'
+        )
+    elif episode_phase == 'finale':
+        phase_instruction = (
+            ' Это финальный ход эпизода. '
+            'Напиши мягкую развязку: подведи итог текущей сцены, сними острое напряжение момента, '
+            'оставь крючок-клиффхэнгер на следующий эпизод. '
+            'Блок «Развилка» не нужен.'
+        )
+
     system = (
         'Пиши литературную сцену интерактивной истории на русском языке. '
         'Соблюдай continuity, характеры и правила мира; держи стиль цельным и читаемым. '
-                'Добавляй элементы хоррора постепенно и деликатно (нарастающий саспенс, тревожные детали среды), без резких жанровых скачков. '
+        'Добавляй элементы хоррора постепенно и деликатно (нарастающий саспенс, тревожные детали среды), без резких жанровых скачков. '
         'Не пиши мета-комментарии и служебные пояснения. '
         'Если это обычный ход эпизода, добавь в конце блок "Развилка" с 2-4 вариантами действий героини без спойлеров. '
         'Если в запросе есть "без развилки" или это пролог/финал эпизода — без блока развилки.'
+        + phase_instruction
     )
     user = {
         'task': 'Сгенерируй следующий ход истории по данным.',
@@ -314,14 +359,14 @@ def default_branch_block() -> str:
     )
 
 
-def call_model(model_route: str, packet: dict, episode_ctx: dict, max_tokens: int = 1600) -> dict:
+def call_model(model_route: str, packet: dict, episode_ctx: dict, episode_target: int = 10, max_tokens: int = 1600) -> dict:
     p = provider_from_model(model_route)
     if not p['api_key']:
         raise RuntimeError(f"Missing API key for model route {model_route}")
 
     body = {
         'model': p['model'],
-        'messages': build_messages(packet, episode_ctx),
+        'messages': build_messages(packet, episode_ctx, episode_target),
     }
     # OpenAI GPT-5.x via Chat Completions expects max_completion_tokens.
     if p.get('provider') == 'openai':
@@ -378,6 +423,7 @@ def main():
         raise RuntimeError('No generation_packet from story_engine turn')
 
     model_route = resolve_model(args.model)
+    episode_target = get_episode_target(args.story_id)
 
     ep_ctx = load_episode_ctx(args.story_id)
     if should_roll_episode(packet.get('user_input', '')) and not args.dry_run:
@@ -391,14 +437,19 @@ def main():
             ep_ctx['completed'] = sorted(completed, key=lambda x: int(x.get('episode', 0)))
         ep_ctx['episode_index'] = cur_ep + 1
 
-    result = call_model(model_route, packet, ep_ctx, max_tokens=args.max_tokens)
+    cur_ep = int(ep_ctx.get('episode_index', 1))
+    turns_used = len([e for e in ep_ctx.get('entries', []) if int(e.get('episode', 1)) == cur_ep])
+    this_turn = turns_used + 1
+    is_finale = this_turn >= episode_target
+
+    result = call_model(model_route, packet, ep_ctx, episode_target=episode_target, max_tokens=args.max_tokens)
 
     scene_text = result['text']
     if not scene_text:
         raise RuntimeError('Model returned empty scene text')
 
     narrative_text, branch_block = split_scene_and_branch(scene_text)
-    if should_add_branch(packet.get('user_input', '')) and not branch_block:
+    if not is_finale and should_add_branch(packet.get('user_input', '')) and not branch_block:
         branch_block = default_branch_block()
         scene_text = narrative_text.rstrip() + '\n\n' + branch_block
 
@@ -408,9 +459,17 @@ def main():
     if not args.dry_run:
         engine_commit(args.story_id, scene_text, branch_note, state_patch, model_route=model_route)
         summary = build_scene_summary(narrative_text, packet.get('user_input', ''))
-        ep = int(ep_ctx.get('episode_index', 1))
-        ep_ctx.setdefault('entries', []).append({'episode': ep, 'summary': summary})
+        ep_ctx.setdefault('entries', []).append({'episode': cur_ep, 'summary': summary})
         save_episode_ctx(args.story_id, ep_ctx)
+
+        if is_finale:
+            fin_entries = [e for e in ep_ctx.get('entries', []) if int(e.get('episode', 1)) == cur_ep]
+            ep_sum = summarize_episode(fin_entries)
+            if ep_sum:
+                completed = [e for e in ep_ctx.get('completed', []) if int(e.get('episode', -1)) != cur_ep]
+                completed.append({'episode': cur_ep, 'summary': ep_sum})
+                ep_ctx['completed'] = sorted(completed, key=lambda x: int(x.get('episode', 0)))
+                save_episode_ctx(args.story_id, ep_ctx)
 
     audio_path = ''
     if args.audio_output and not args.dry_run and should_render_audio(args.story_id):
@@ -434,6 +493,9 @@ def main():
         'episode_index': current_ep,
         'episode_summaries_count': ep_count,
         'completed_episode_summaries_count': len(ep_ctx.get('completed', [])),
+        'episode_phase': calculate_episode_phase(this_turn, episode_target),
+        'turns_remaining': max(0, episode_target - this_turn),
+        'episode_complete': is_finale,
     }
     print(json.dumps(out, ensure_ascii=False))
 

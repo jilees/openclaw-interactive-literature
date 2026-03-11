@@ -91,11 +91,14 @@ def cmd_init(args):
     }
     characters = {'characters': [], 'updated_at': now_iso()}
     images = {'daily': {}, 'history': [], 'updated_at': now_iso()}
+    settings = {'audio_enabled': True, 'episode_target': 10, 'updated_at': now_iso()}
 
     save_json(d / 'state.json', state)
     save_json(d / 'world.json', world)
     save_json(d / 'characters.json', characters)
     save_json(d / 'images.json', images)
+    if not (d / 'settings.json').exists():
+        save_json(d / 'settings.json', settings)
 
     append_jsonl(d / 'timeline.jsonl', {
         'at': now_iso(),

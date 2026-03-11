@@ -1,5 +1,6 @@
 {
   "audio_enabled": false,
+  "episode_target": 10,
   "updated_at": "2026-03-11T08:14:00+03:00",
   "note": "По запросу Ильи: временно отключена генерация аудио в story-mode"
 }
