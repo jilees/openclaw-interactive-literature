@@ -167,23 +167,22 @@ def build_scene_summary(scene_text: str, user_input: str) -> str:
     if not p['api_key']:
         # Safe fallback if summary model key is missing.
         t = re.sub(r'\s+', ' ', (scene_text or '').strip())
-        lead = f"Ход: {user_input.strip()} " if user_input.strip() else ''
-        return estimate_words_150_budget((lead + t).strip())
+        return estimate_words_150_budget(t)
 
-    prompt = {
-        'task': 'Сожми сцену в короткое саммари для continuity.',
-        'constraints': [
-            'До 150 слов.',
-            'Сохранить ключевые факты и причинно-следственную связь.',
-            'Обязательно отразить чем закончился ход (клиффхэнгер/точка остановки).',
-            'Без украшений, только факты сцены.',
-        ],
-        'user_input': user_input,
-        'scene_text': scene_text,
-    }
+    prompt = (
+        'Выпиши факты хода списком для continuity интерактивной истории.\n'
+        'Формат: каждый факт — отдельная строка, начинается с "- ".\n'
+        'Правила:\n'
+        '- Первая строка: решение пользователя — "- Решение: <кратко>".\n'
+        '- Затем: конкретные события, открытия, изменения состояния из сцены.\n'
+        '- Последняя строка: чем закончился ход (клиффхэнгер / точка остановки).\n'
+        '- До 200 слов суммарно. Без литературных украшений.\n\n'
+        f'РЕШЕНИЕ ПОЛЬЗОВАТЕЛЯ: {user_input}\n\n'
+        f'СЦЕНА:\n{scene_text}'
+    )
     messages = [
-        {'role': 'system', 'content': 'Ты делаешь технические саммари для continuity интерактивной истории.'},
-        {'role': 'user', 'content': json.dumps(prompt, ensure_ascii=False)}
+        {'role': 'system', 'content': 'Ты — технический редактор continuity интерактивной истории. Пиши по-русски.'},
+        {'role': 'user', 'content': prompt}
     ]
 
     body = {
@@ -191,9 +190,9 @@ def build_scene_summary(scene_text: str, user_input: str) -> str:
         'messages': messages,
     }
     if p.get('provider') == 'openai':
-        body['max_completion_tokens'] = 320
+        body['max_completion_tokens'] = 3000
     else:
-        body['max_tokens'] = 320
+        body['max_tokens'] = 3000
 
     data = json.dumps(body, ensure_ascii=False).encode('utf-8')
     req = request.Request(p['base_url'], data=data, method='POST')
@@ -209,14 +208,13 @@ def build_scene_summary(scene_text: str, user_input: str) -> str:
         content = obj['choices'][0]['message']['content']
         text = re.sub(r'\s+', ' ', str(content).strip())
         if text:
-            return trim_words(text, 150)
+            return trim_words(text, 200)
     except Exception:
         pass
 
     # Last-resort fallback (deterministic trim)
     t = re.sub(r'\s+', ' ', (scene_text or '').strip())
-    lead = f"Ход: {user_input.strip()} " if user_input.strip() else ''
-    return estimate_words_150_budget((lead + t).strip())
+    return estimate_words_150_budget(t)
 
 
 def compact_packet(packet: dict, episode_ctx: dict) -> dict:
@@ -256,7 +254,6 @@ def compact_packet(packet: dict, episode_ctx: dict) -> dict:
         'world_rules': world.get('rules', [])[:12],
         'do_not_break': world.get('do_not_break', [])[:12],
         'characters': names,
-        'branch_notes': packet.get('branch_notes', [])[-6:],
         'episode_summaries': entries,
         'completed_episode_summaries': completed,
         'user_input': packet.get('user_input', ''),
@@ -410,7 +407,7 @@ def main():
 
     if not args.dry_run:
         engine_commit(args.story_id, scene_text, branch_note, state_patch, model_route=model_route)
-        summary = build_scene_summary(scene_text, packet.get('user_input', ''))
+        summary = build_scene_summary(narrative_text, packet.get('user_input', ''))
         ep = int(ep_ctx.get('episode_index', 1))
         ep_ctx.setdefault('entries', []).append({'episode': ep, 'summary': summary})
         save_episode_ctx(args.story_id, ep_ctx)

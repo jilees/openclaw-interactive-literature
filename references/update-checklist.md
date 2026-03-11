@@ -13,10 +13,7 @@
    - `updated_at` обновлён,
    - `phase/tension/open_loops/resolved_loops` отражают текущую сцену.
 
-3. `branches.json`
-   - добавлена новая заметка по ветке (если был разворот).
-
-4. `episode_context.json`
+3. `episode_context.json`
    - сохранено саммари хода (~150 слов) с фиксацией концовки.
 
 ## Условно (при изменениях)

@@ -53,7 +53,6 @@ def read_story(story_id: str):
         'state': load_json(d / 'state.json', {}),
         'world': load_json(d / 'world.json', {}),
         'characters': load_json(d / 'characters.json', {'characters': []}),
-        'branches': load_json(d / 'branches.json', {'notes': []}),
         # images.json migration notes:
         # - legacy: daily/history (counted attempts or generated images)
         # - current: daily_generated + daily_delivered + history + sent_history
@@ -91,13 +90,11 @@ def cmd_init(args):
         'updated_at': now_iso(),
     }
     characters = {'characters': [], 'updated_at': now_iso()}
-    branches = {'notes': [], 'updated_at': now_iso()}
     images = {'daily': {}, 'history': [], 'updated_at': now_iso()}
 
     save_json(d / 'state.json', state)
     save_json(d / 'world.json', world)
     save_json(d / 'characters.json', characters)
-    save_json(d / 'branches.json', branches)
     save_json(d / 'images.json', images)
 
     append_jsonl(d / 'timeline.jsonl', {
@@ -172,7 +169,6 @@ def cmd_turn(args):
         },
         'world': story['world'],
         'characters': story['characters'],
-        'branch_notes': story['branches'].get('notes', [])[-8:],
         'user_input': args.user_input,
         'contract_ref': str(ROOT / 'references' / 'story-contract.md'),
     }
@@ -212,22 +208,13 @@ def cmd_commit(args):
     state['updated_at'] = now_iso()
     save_json(Path(story['dir']) / 'state.json', state)
 
-    branches = story['branches']
-    if args.branch_note:
-        branches.setdefault('notes', []).append({
-            'at': now_iso(),
-            'note': args.branch_note,
-        })
-        branches['updated_at'] = now_iso()
-        save_json(Path(story['dir']) / 'branches.json', branches)
-
     append_jsonl(Path(story['dir']) / 'timeline.jsonl', {
         'at': now_iso(),
         'event': 'commit',
         'branch_note': args.branch_note,
         'state_patch': patch,
         'model': (args.model or '').strip(),
-        'scene_preview': (args.scene_text or '')[:500],
+        'scene_text': (args.scene_text or ''),
     })
 
     print(json.dumps({'ok': True, 'story_id': state.get('story_id')}, ensure_ascii=False))
