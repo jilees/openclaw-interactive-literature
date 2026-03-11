@@ -1,0 +1,59 @@
+{
+  "daily_generated": {
+    "2026-03-09": 1
+  },
+  "daily_delivered": {
+    "2026-03-09": 0
+  },
+  "history": [
+    {
+      "at": "2026-03-09T01:01:33",
+      "moment": "act2-lambda-descent",
+      "file": "/root/.openclaw/workspace/tmp/everestown-lambda-descent-01.png",
+      "resolution": "1K",
+      "delivered": false,
+      "delivery_channel": null
+    }
+  ],
+  "sent_history": [],
+  "updated_at": "2026-03-09T19:57:00",
+  "suggested_moments": [
+    {
+      "at": "act1-incident-door",
+      "title": "Шлюз «Ниже-7» и первый ультиматум",
+      "why": "Первый высокий драматический пик, визуально сильная сцена.",
+      "prompt_en": "cinematic sci-fi scene inside a vertical mountain city, frosted corridor 'Lower-7', female security major in dark tactical coat facing a sealed lab door, emergency red strips, cold vapor, tense team silhouettes, hard rim light, realistic, ultra-detailed"
+    },
+    {
+      "at": "act2-lambda-descent",
+      "title": "Спуск в колодец «Лямбда»",
+      "why": "Ключевой поворот и рискованный выбор героев.",
+      "prompt_en": "deep vertical shaft inside ancient industrial structure under Everest city, rusted warning plate, climber descending on cable into blue-black mist, resonant glow from below, techno-gothic atmosphere, cinematic realism"
+    },
+    {
+      "at": "act3-song-of-depth",
+      "title": "Проявление «Песни глубины»",
+      "why": "Момент перехода от чистой техногеники к мистическому слою.",
+      "prompt_en": "control room screens showing strange harmonic patterns like sacred geometry over seismic data, subtle bioluminescent wave washing metal walls, exhausted team in silence, near-future hard sci-fi with mystical undertone"
+    }
+  ],
+  "style_profile": {
+    "name": "everestown-cinematic-photoreal",
+    "description_ru": "Фотореализм с яркими деталями, стилизация под кадры из высокобюджетного голливудского кино.",
+    "keywords": [
+      "photorealistic",
+      "cinematic",
+      "high-budget Hollywood",
+      "ultra-detailed",
+      "anamorphic frame",
+      "realistic lighting"
+    ],
+    "negative_keywords": [
+      "cartoon",
+      "anime",
+      "painterly",
+      "low-detail",
+      "fantasy armor"
+    ]
+  }
+}
