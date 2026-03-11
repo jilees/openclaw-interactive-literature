@@ -167,13 +167,111 @@ def resolve_summary_model() -> str:
     # Summary model default: GPT-5-mini (can be overridden via env).
     return os.getenv('STORY_SUMMARY_MODEL', 'custom-api-openai-com/gpt-5-mini')
 
-def summarize_episode(entries: list) -> str:
+
+def resolve_main_model() -> str:
+    return 'custom-api-openai-com/gpt-5.4'
+
+
+def _llm_call(model_route: str, messages: list, max_tokens: int = 3000) -> str:
+    """Shared HTTP helper for summary/patch LLM calls. Returns content string or raises."""
+    p = provider_from_model(model_route)
+    if not p['api_key']:
+        raise RuntimeError(f'Missing API key for {model_route}')
+    body = {'model': p['model'], 'messages': messages}
+    if p.get('provider') == 'openai':
+        body['max_completion_tokens'] = max_tokens
+    else:
+        body['max_tokens'] = max_tokens
+    data = json.dumps(body, ensure_ascii=False).encode('utf-8')
+    req = request.Request(p['base_url'], data=data, method='POST')
+    req.add_header('Content-Type', 'application/json')
+    req.add_header('Authorization', f"Bearer {p['api_key']}")
+    for k, v in p['headers'].items():
+        req.add_header(k, v)
+    with request.urlopen(req, timeout=120) as resp:
+        raw = resp.read().decode('utf-8')
+    obj = json.loads(raw)
+    return str(obj['choices'][0]['message']['content']).strip()
+
+
+def build_episode_summary_llm(entries: list) -> str:
+    """LLM-generated episode summary from per-turn bullet summaries (gpt-5-mini)."""
     parts = [str(e.get('summary', '')).strip() for e in entries if str(e.get('summary', '')).strip()]
     if not parts:
         return ''
-    # Keep 150-200 token-ish budget (~120-150 words) for whole episode summary.
-    joined = ' '.join(parts)
-    return trim_words(joined, 145)
+    joined = '\n\n'.join(parts)
+    prompt = (
+        'Выдели 10 ключевых событий эпизода для continuity интерактивной истории.\n'
+        'Формат: ровно 10 строк, каждая начинается с "- ".\n'
+        'Правила:\n'
+        '- Строка 1: главное действие/решение протагониста в этом эпизоде.\n'
+        '- Строки 2–9: важнейшие открытия, повороты, изменения (одно событие — одна строка).\n'
+        '- Строка 10: клиффхэнгер/крючок, которым завершился эпизод.\n'
+        '- Без литературных украшений. Только факты. Каждая строка — до 25 слов.\n\n'
+        'САММАРИ ХОДОВ ЭПИЗОДА:\n' + joined
+    )
+    messages = [
+        {'role': 'system', 'content': 'Ты — технический редактор continuity интерактивной истории. Пиши по-русски.'},
+        {'role': 'user', 'content': prompt},
+    ]
+    try:
+        text = _llm_call(resolve_summary_model(), messages)
+        if text:
+            return text.strip()
+    except Exception:
+        pass
+    # Fallback: naive concat trim
+    return trim_words(' '.join(parts), 145)
+
+
+def build_episode_state_patch(episode_summary: str, open_loops: list, resolved_loops: list) -> dict:
+    """Ask gpt-5.4 to update narrative arcs after episode end. Returns dict or {}."""
+    open_str = '\n'.join(f'- {l}' for l in open_loops) or '(нет)'
+    resolved_str = '\n'.join(f'- {l}' for l in resolved_loops) or '(нет)'
+    prompt = (
+        'На основе итогов эпизода обнови состояние истории.\n'
+        'Верни ТОЛЬКО валидный JSON (без markdown, без пояснений) в формате:\n'
+        '{\n'
+        '  "open_loops": ["..."],\n'
+        '  "resolved_loops": ["..."],\n'
+        '  "tension": 0.0,\n'
+        '  "next_episode_hook": "..."\n'
+        '}\n\n'
+        'Правила:\n'
+        '- open_loops: актуальные незакрытые нити после эпизода (перенести старые + добавить новые).\n'
+        '- resolved_loops: нити, закрытые именно в этом эпизоде (кратко что выяснилось).\n'
+        '- tension: напряжение 0.0–1.0 по итогам финала.\n'
+        '- next_episode_hook: одно предложение — зацепка/вопрос, тянущий в следующий эпизод.\n\n'
+        f'САММАРИ ЭПИЗОДА:\n{episode_summary}\n\n'
+        f'ТЕКУЩИЕ ОТКРЫТЫЕ НИТИ:\n{open_str}\n\n'
+        f'ЗАКРЫТЫЕ НИТИ (до эпизода):\n{resolved_str}'
+    )
+    messages = [
+        {'role': 'system', 'content': 'Ты — редактор нарративного состояния интерактивной истории. Отвечай строго JSON.'},
+        {'role': 'user', 'content': prompt},
+    ]
+    try:
+        text = _llm_call(resolve_main_model(), messages)
+        text = re.sub(r'^```[a-z]*\n?', '', text.strip())
+        text = re.sub(r'\n?```$', '', text)
+        return json.loads(text)
+    except Exception:
+        return {}
+
+
+def apply_state_patch_direct(story_id: str, patch: dict):
+    """Directly update state.json fields without going through engine_commit timeline."""
+    from datetime import datetime, timezone
+    state_path = ROOT / 'memory' / 'stories' / story_id / 'state.json'
+    if not state_path.exists() or not patch:
+        return
+    state = json.loads(state_path.read_text(encoding='utf-8'))
+    for k, v in patch.items():
+        state[k] = v
+    state['updated_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+    tmp = state_path.with_suffix('.json.tmp')
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
+    os.replace(tmp, state_path)
 
 
 def build_scene_summary(scene_text: str, user_input: str) -> str:
@@ -276,6 +374,7 @@ def compact_packet(packet: dict, episode_ctx: dict, episode_target: int = 10) ->
         'characters': names,
         'episode_summaries': entries,
         'completed_episode_summaries': completed,
+        'next_episode_hook': episode_ctx.get('next_episode_hook', ''),
         'episode_phase': episode_phase,
         'turns_remaining': turns_remaining,
         'episode_target': episode_target,
@@ -429,12 +528,13 @@ def main():
     if should_roll_episode(packet.get('user_input', '')) and not args.dry_run:
         cur_ep = int(ep_ctx.get('episode_index', 1))
         cur_entries = [e for e in ep_ctx.get('entries', []) if int(e.get('episode', 1)) == cur_ep]
-        ep_sum = summarize_episode(cur_entries)
+        ep_sum = build_episode_summary_llm(cur_entries)
         if ep_sum:
             completed = ep_ctx.setdefault('completed', [])
             completed = [e for e in completed if int(e.get('episode', -1)) != cur_ep]
             completed.append({'episode': cur_ep, 'summary': ep_sum})
             ep_ctx['completed'] = sorted(completed, key=lambda x: int(x.get('episode', 0)))
+        ep_ctx['entries'] = [e for e in ep_ctx.get('entries', []) if int(e.get('episode', 1)) != cur_ep]
         ep_ctx['episode_index'] = cur_ep + 1
 
     cur_ep = int(ep_ctx.get('episode_index', 1))
@@ -464,12 +564,26 @@ def main():
 
         if is_finale:
             fin_entries = [e for e in ep_ctx.get('entries', []) if int(e.get('episode', 1)) == cur_ep]
-            ep_sum = summarize_episode(fin_entries)
+            ep_sum = build_episode_summary_llm(fin_entries)
             if ep_sum:
                 completed = [e for e in ep_ctx.get('completed', []) if int(e.get('episode', -1)) != cur_ep]
                 completed.append({'episode': cur_ep, 'summary': ep_sum})
                 ep_ctx['completed'] = sorted(completed, key=lambda x: int(x.get('episode', 0)))
-                save_episode_ctx(args.story_id, ep_ctx)
+            ep_ctx['entries'] = [e for e in ep_ctx.get('entries', []) if int(e.get('episode', 1)) != cur_ep]
+            save_episode_ctx(args.story_id, ep_ctx)
+
+            state_data = packet.get('state', {})
+            ep_state_patch = build_episode_state_patch(
+                ep_sum or '',
+                state_data.get('open_loops', []),
+                state_data.get('resolved_loops', []),
+            )
+            if ep_state_patch:
+                hook = ep_state_patch.pop('next_episode_hook', '')
+                if hook:
+                    ep_ctx['next_episode_hook'] = hook
+                    save_episode_ctx(args.story_id, ep_ctx)
+                apply_state_patch_direct(args.story_id, ep_state_patch)
 
     audio_path = ''
     if args.audio_output and not args.dry_run and should_render_audio(args.story_id):

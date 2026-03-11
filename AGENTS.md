@@ -30,6 +30,32 @@
 - JSON-ответ скрипта содержит поля: `episode_phase`, `turns_remaining`, `episode_complete`.
 - Ручной роллинг через «начать новый эпизод» продолжает работать параллельно.
 
+## Завершение эпизода — что происходит автоматически
+
+При `is_finale = True` (turn >= episode_target) скрипт выполняет:
+
+1. **Саммари эпизода** — `build_episode_summary_llm()` вызывает gpt-5-mini со всеми per-turn bullet-саммари текущего эпизода и формирует связный нарратив ~200 слов (первая строка — главное действие, последняя — клиффхэнгер). Результат сохраняется в `episode_context.json → completed[]`.
+
+2. **Очистка entries** — per-turn записи текущего эпизода удаляются из `entries[]` (они уже в `completed`). Следующий эпизод начинает с чистым массивом.
+
+3. **Обновление арок** — `build_episode_state_patch()` вызывает gpt-5.4 с саммари эпизода и текущими `open_loops` / `resolved_loops`. Модель возвращает JSON:
+   - `open_loops` — актуальные незакрытые нити после эпизода
+   - `resolved_loops` — что было закрыто в этом эпизоде
+   - `tension` — новое напряжение
+   - `next_episode_hook` — зацепка для следующего эпизода
+   Результат применяется к `state.json` напрямую (без timeline-записи).
+
+4. **next_episode_hook** — зацепка сохраняется в `episode_context.json` и передаётся LLM в контексте следующего эпизода.
+
+### Ручной repair
+
+Если автоматическое завершение отработало некорректно:
+```bash
+set -a && source .env && set +a && PYTHONUTF8=1 python scripts/repair_episode.py \
+  --story-id <story_id> --episode <N> --new-index <N+1>
+```
+Скрипт пересобирает саммари, обновляет `completed[]`, очищает `entries`, инкрементирует `episode_index` и обновляет `state.json`.
+
 ## Скрипты
 
 - `scripts/story_engine.py` — init/turn/commit/status.
