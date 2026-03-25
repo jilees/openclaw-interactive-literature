@@ -6,3 +6,5 @@ __pycache__/
 *.tmp
 .env
 .claude/settings.local.json
+out/
+memory/audio_bgm_state.json
